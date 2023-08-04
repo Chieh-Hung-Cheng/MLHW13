@@ -44,13 +44,10 @@ class ImageNetwork(nn.Module):
 
 def get_teacher_network():
     teacher_network = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=False, num_classes=11)
-    teacher_network.load_state_dict(torch.load(os.path.join(r"D:\ML_Dataset\HW13\Food-11", "resnet18_teacher.ckpt")))
+    teacher_network.load_state_dict(torch.load(os.path.join(r"D:\ML_Dataset\HW13\Food-11", "resnet18_teacher.ckpt"),
+                                               map_location='cpu'))
     return teacher_network.cuda()
 
 
 if __name__ == "__main__":
-    teacher = get_teacher_network()
-    summary(teacher, input_size=(4, 3, 224, 224))
-    student = ImageNetwork()
-    summary(student, input_size=(4, 3, 224, 224))
-    pass
+    get_teacher_network()

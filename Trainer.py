@@ -2,12 +2,41 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 import time
 
 from Utils import Utils
 from ImageData import ImageDataset
 from ImageNetwork import ImageNetwork, get_teacher_network
+
+
+def knowledge_distillation_loss(student_answer, labels, teacher_answer, alpha=0.5, temperature=1.0):
+    """
+    Implement knowledge distillation loss
+    :param student_answer: [batch_size, num_classes]
+    :param labels: [batch_size, ]
+    :param teacher_answer: [batch_size, num_classes]
+    :param alpha: float
+    :param temperature: float
+    :return:
+    """
+    # Original Cross Entropy Loss
+    csl_criterion = nn.CrossEntropyLoss()
+    csl_loss = csl_criterion(student_answer, labels)
+    assert(csl_loss > 0)
+    # KL Divergence Loss
+    p_symbol = student_answer / temperature
+    q_symbol = teacher_answer / temperature
+    p_log_softmax = F.log_softmax(p_symbol, dim=1)
+    q_log_softmax = F.log_softmax(q_symbol, dim=1)
+    kl_criterion = nn.KLDivLoss(reduction='batchmean', log_target=True)
+    kl_loss = kl_criterion(p_log_softmax, q_log_softmax)
+
+    return (alpha * (temperature**2) * kl_loss) + ((1 - alpha) * csl_loss)
+
+
 
 
 class Trainer:
@@ -17,7 +46,7 @@ class Trainer:
         self.save_path = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(self.save_path):
             os.mkdir(self.save_path)
-        self.time_string = time.strftime("H%M%m%d")
+        self.time_string = time.strftime("%H%M%m%d")
         self.num_epochs = 50
         batch_size = 64
         # Data Related
@@ -29,7 +58,7 @@ class Trainer:
                                        pin_memory=True)
         self.valid_loader = DataLoader(self.validset,
                                        batch_size=batch_size,
-                                       shuffle=False,
+                                       shuffle=True,
                                        pin_memory=True)
         # Model related
         self.teacher = get_teacher_network()
@@ -55,12 +84,11 @@ class Trainer:
         for idx, (image_b, label_b) in enumerate(train_pbar):
             # Forward pass
             image_b, label_b = image_b.cuda(), label_b.cuda()
-            pred_example = self.teacher(image_b)
-            pred_practice = self.student(image_b)
+            pred_teacher = self.teacher(image_b)
+            pred_student = self.student(image_b)
             # Backward Pass
             self.optimizer.zero_grad()
-            pred_example_softmax = torch.softmax(pred_example, dim=1)
-            loss = self.criterion(pred_example_softmax, pred_practice)
+            loss = knowledge_distillation_loss(pred_student, label_b, pred_teacher, alpha=0.5, temperature=1.5)
             loss.backward()
             self.optimizer.step()
             # Statistics
@@ -85,7 +113,7 @@ class Trainer:
             # Backward Pass
             loss = self.criterion(pred_b, label_b)
             # Statistics
-            hit_count += (pred_b.argmax(1) == label_b).sum().item()
+            hit_count += (pred_b.argmax(dim=1) == label_b).sum().item()
             item_count += len(label_b)
             loss_accumulate += loss.item()
             # Display
@@ -94,6 +122,27 @@ class Trainer:
                                     "best_accuracy": f"{self.best_accuracy:.1%}"})
 
         return loss_accumulate / (idx + 1), hit_count / item_count
+
+    def valid_teacher(self):
+        self.teacher.eval()
+        with torch.no_grad():
+            loss_accumulate = 0
+            hit_count = 0
+            item_count = 0
+            valid_pbar = tqdm(self.valid_loader)
+            for idx, (image_b, label_b) in enumerate(valid_pbar):
+                # Forward Pass
+                image_b, label_b = image_b.cuda(), label_b.cuda()
+                pred_b = self.teacher(image_b)
+                # Backward Pass
+                loss = self.criterion(pred_b, label_b)
+                # Statistics
+                loss_accumulate += loss.item()
+                hit_count += (pred_b.argmax(dim=1) == label_b).sum()
+                item_count += len(label_b)
+                # Display
+                valid_pbar.set_postfix({"mean valid loss": f"{loss_accumulate/(idx+1):.5f}",
+                                        "valid accuracy": f"{hit_count / item_count:.1%}"})
 
     def summarize(self, valid_accuracy):
         if valid_accuracy > self.best_accuracy:
