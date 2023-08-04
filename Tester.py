@@ -20,7 +20,7 @@ class Tester:
         if not os.path.isdir(self.output_path):
             os.mkdir(self.output_path)
         model_path = os.path.join(os.getcwd(), "models")
-        load_name = "10370804"
+        load_name = "15360804"
         self.student = ImageNetwork().cuda()
         self.student.load_state_dict(torch.load(os.path.join(model_path, f"model_{load_name}.ckpt")))
 

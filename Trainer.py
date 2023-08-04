@@ -47,7 +47,7 @@ class Trainer:
         if not os.path.isdir(self.save_path):
             os.mkdir(self.save_path)
         self.time_string = time.strftime("%H%M%m%d")
-        self.num_epochs = 50
+        self.num_epochs = 100
         batch_size = 64
         # Data Related
         self.trainset = ImageDataset("train")
@@ -64,13 +64,15 @@ class Trainer:
         self.teacher = get_teacher_network()
         self.student = ImageNetwork().cuda()
         self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adam(self.student.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.student.parameters(), lr=1e-3, weight_decay=1e-5)
         # Stats
         self.best_accuracy = np.NINF
         self.best_loss = np.PINF
+        self.stale = 0
+        self.epoch_now = 0
 
     def train_loop(self):
-        for epoch in range(self.num_epochs):
+        for self.epoch_now in range(self.num_epochs):
             mean_train_loss = self.train_one_epoch()
             mean_valid_loss, valid_accuracy = self.valid_one_epoch()
             self.summarize(valid_accuracy)
@@ -81,6 +83,7 @@ class Trainer:
         loss_accumulate = 0
         idx = 0
         train_pbar = tqdm(self.train_loader)
+        train_pbar.set_description("Train {}/{}".format(self.epoch_now + 1, self.num_epochs))
         for idx, (image_b, label_b) in enumerate(train_pbar):
             # Forward pass
             image_b, label_b = image_b.cuda(), label_b.cuda()
@@ -95,7 +98,8 @@ class Trainer:
             loss_accumulate += loss.item()
             # Display
             train_pbar.set_postfix({"mean train loss": f"{loss_accumulate / (idx + 1):.5f}",
-                                    "best_accuracy": f"{self.best_accuracy:.1%}"})
+                                    "best_accuracy": f"{self.best_accuracy:.1%}",
+                                    "stale": f"{self.stale}"})
 
         return loss_accumulate / (idx + 1)
 
@@ -106,6 +110,7 @@ class Trainer:
         item_count = 0
         idx = 0
         valid_pbar = tqdm(self.valid_loader)
+        valid_pbar.set_description("Valid {}/{}".format(self.epoch_now + 1, self.num_epochs))
         for idx, (image_b, label_b) in enumerate(valid_pbar):
             # Forward Pass
             image_b, label_b = image_b.cuda(), label_b.cuda()
@@ -119,7 +124,8 @@ class Trainer:
             # Display
             valid_pbar.set_postfix({"mean valid loss": f"{loss_accumulate / (idx + 1):.5f}",
                                     "valid accuracy": f"{hit_count / item_count:.1%}",
-                                    "best_accuracy": f"{self.best_accuracy:.1%}"})
+                                    "best_accuracy": f"{self.best_accuracy:.1%}",
+                                    "stale": f"{self.stale}"})
 
         return loss_accumulate / (idx + 1), hit_count / item_count
 
@@ -147,7 +153,10 @@ class Trainer:
     def summarize(self, valid_accuracy):
         if valid_accuracy > self.best_accuracy:
             self.best_accuracy = valid_accuracy
+            self.stale = 0
             torch.save(self.student.state_dict(), os.path.join(self.save_path, f"model_{self.time_string}.ckpt"))
+        else:
+            self.stale += 1
 
 
 if __name__ == "__main__":
